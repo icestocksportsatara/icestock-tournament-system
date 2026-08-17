@@ -1,0 +1,6 @@
+{
+  "name": "Icestock Sport Global Tournament Management System",
+  "description": "Enterprise-grade 3D Icestock Sport Tournament Management with Rink-Wise Referee Assignment & Availability, Mandatory Super Admin KYC Verification Gate, Real-Time Scoring, Dynamic Brackets, Multi-Role Federation Portals, and Broadcast Displays.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

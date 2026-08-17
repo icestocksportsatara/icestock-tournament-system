@@ -1,0 +1,724 @@
+// Prisma Schema for Production-Grade Icestock Global Tournament Management System
+// International Federation Icestocksport (IFI) & National Federation Standards
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum UserRole {
+  SUPER_ADMIN
+  GLOBAL_FEDERATION_ADMIN
+  CONTINENTAL_ADMIN
+  NATIONAL_FEDERATION_ADMIN
+  STATE_ASSOCIATION_ADMIN
+  DISTRICT_ASSOCIATION_ADMIN
+  TOURNAMENT_DIRECTOR
+  CHIEF_REFEREE
+  REFEREE
+  UMPIRE
+  MEASURER
+  TEAM_MANAGER
+  PLAYER
+  MEDIA
+  VIEWER
+}
+
+enum AccountStatus {
+  ACTIVE
+  SUSPENDED
+  LOCKED
+  PENDING_KYC
+}
+
+enum UserKycStatus {
+  NOT_REQUIRED
+  PENDING_APPROVAL
+  VERIFIED
+  REJECTED
+}
+
+enum Discipline {
+  TEAM_GAME
+  TEAM_TARGET
+  TEAM_DISTANCE
+  INDIVIDUAL_TARGET
+  INDIVIDUAL_DISTANCE
+  HEAD_TO_HEAD
+}
+
+enum TournamentTier {
+  INTERNATIONAL
+  CONTINENTAL
+  NATIONAL
+  STATE
+  DISTRICT
+  CLUB
+}
+
+enum TournamentStatus {
+  DRAFT
+  PENDING_SANCTION
+  SANCTIONED
+  REGISTRATION_OPEN
+  REGISTRATION_CLOSED
+  DRAW_GENERATED
+  CHECK_IN
+  LIVE
+  RESULT_VERIFICATION
+  COMPLETED
+  ARCHIVED
+  CANCELLED
+}
+
+enum GenderCategory {
+  MEN
+  WOMEN
+  MIXED
+  JUNIORS_U23
+  JUNIORS_U19
+  JUNIORS_U16
+  YOUTH_U16
+  SENIORS
+  VETERANS
+}
+
+enum SurfaceType {
+  ICE
+  SYNTHETIC_ICE
+  ASPHALT_SUMMER
+  INDOOR_POLYMER
+}
+
+enum MatchStage {
+  GROUP_STAGE
+  ROUND_OF_16
+  QUARTER_FINAL
+  SEMI_FINAL
+  BRONZE_MATCH
+  FINAL
+}
+
+enum MatchStatus {
+  SCHEDULED
+  WARMUP
+  LIVE
+  COMPLETED
+  LOCKED_VERIFIED
+  POSTPONED
+  CANCELLED
+}
+
+enum ScorecardState {
+  DRAFT
+  SUBMITTED
+  CHIEF_REFEREE_REVIEW
+  VERIFIED
+  LOCKED
+}
+
+enum RefereeStatus {
+  AVAILABLE_ON_RINK
+  OFFICIATING_MATCH
+  ON_STANDBY
+  ON_BREAK
+  OFF_DUTY
+}
+
+enum RefereeCertificationLevel {
+  IFI_MASTER_INTERNATIONAL
+  IFI_CHIEF_UMPIRE
+  NATIONAL_A
+  STATE_CERTIFIED
+  DISTRICT_OFFICIAL
+}
+
+// ----------------------------------------------------
+// Core User & Auth Models
+// ----------------------------------------------------
+
+model User {
+  id                    String              @id @default(uuid())
+  email                 String              @unique
+  username              String              @unique
+  passwordHash          String
+  fullName              String
+  role                  UserRole            @default(PLAYER)
+  avatar                String?
+  federationLicenseId   String              @unique
+  country               String
+  countryCode           String
+  state                 String?
+  district              String?
+  club                  String?
+  isVerified            Boolean             @default(false)
+  twoFactorEnabled      Boolean             @default(false)
+  twoFactorSecret       String?
+  status                AccountStatus       @default(ACTIVE)
+  kycStatus             UserKycStatus       @default(NOT_REQUIRED)
+  failedLoginAttempts   Int                 @default(0)
+  lockoutUntil          DateTime?
+  lastLoginAt           DateTime?
+  createdAt             DateTime            @default(now())
+  updatedAt             DateTime            @updatedAt
+
+  // Relationships
+  sessions              Session[]
+  twoFactorSecrets      TwoFactorSecret[]
+  recoveryCodes         RecoveryCode[]
+  kycDossier            UserKycDossier?
+  playerProfile         Player?
+  refereeProfile        Referee?
+  auditLogs             AuditLog[]
+  createdTournaments    Tournament[]        @relation("TournamentCreator")
+  refereeAssignments    RefereeAssignment[]
+
+  @@index([email])
+  @@index([username])
+  @@index([role])
+  @@index([kycStatus])
+}
+
+model Session {
+  id                    String              @id @default(uuid())
+  userId                String
+  token                 String              @unique
+  refreshToken          String?             @unique
+  ipAddress             String
+  userAgent             String
+  isRevoked             Boolean             @default(false)
+  twoFactorVerified     Boolean             @default(false)
+  expiresAt             DateTime
+  createdAt             DateTime            @default(now())
+  updatedAt             DateTime            @updatedAt
+
+  user                  User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([token])
+}
+
+model TwoFactorSecret {
+  id                    String              @id @default(uuid())
+  userId                String
+  encryptedSecret       String
+  iv                    String
+  tag                   String
+  confirmed             Boolean             @default(false)
+  createdAt             DateTime            @default(now())
+
+  user                  User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model RecoveryCode {
+  id                    String              @id @default(uuid())
+  userId                String
+  codeHash              String
+  isUsed                Boolean             @default(false)
+  usedAt                DateTime?
+  createdAt             DateTime            @default(now())
+
+  user                  User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model UserKycDossier {
+  id                    String              @id @default(uuid())
+  userId                String              @unique
+  documentType          String
+  documentNumber        String
+  phone                 String
+  officialAddress       String
+  federationAffiliation String
+  jurisdictionLevel     String?
+  documentFileUrl       String?
+  documentFileName      String?
+  appointmentLetterNumber String?
+  declarationAccepted   Boolean             @default(true)
+  reviewedAt            DateTime?
+  reviewedByAdminId     String?
+  reviewedByAdminName   String?
+  rejectionReason       String?
+  verificationNotes     String?
+  submittedAt           DateTime            @default(now())
+  updatedAt             DateTime            @updatedAt
+
+  user                  User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// ----------------------------------------------------
+// Permissions & Governance
+// ----------------------------------------------------
+
+model Permission {
+  id                    String              @id @default(uuid())
+  name                  String              @unique // e.g. "TOURNAMENT_MANAGE", "SCORE_EDIT"
+  description           String
+  category              String
+  createdAt             DateTime            @default(now())
+
+  rolePermissions       RolePermission[]
+}
+
+model RolePermission {
+  id                    String              @id @default(uuid())
+  role                  UserRole
+  permissionId          String
+  createdAt             DateTime            @default(now())
+
+  permission            Permission          @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@unique([role, permissionId])
+}
+
+// ----------------------------------------------------
+// Federation & Geographic Hierarchy
+// ----------------------------------------------------
+
+model Federation {
+  id                    String              @id @default(uuid())
+  name                  String
+  shortCode             String              @unique
+  headquarters          String
+  contactEmail          String
+  activeSeason          String              @default("2026/2027")
+  createdAt             DateTime            @default(now())
+  updatedAt             DateTime            @updatedAt
+}
+
+model Country {
+  id                    String              @id @default(uuid())
+  code                  String              @unique
+  name                  String
+  flagUrl               String?
+  createdAt             DateTime            @default(now())
+
+  states                State[]
+}
+
+model State {
+  id                    String              @id @default(uuid())
+  countryCode           String
+  name                  String
+  createdAt             DateTime            @default(now())
+
+  country               Country             @relation(fields: [countryCode], references: [code], onDelete: Cascade)
+  districts             District[]
+
+  @@unique([countryCode, name])
+}
+
+model District {
+  id                    String              @id @default(uuid())
+  stateId               String
+  name                  String
+  createdAt             DateTime            @default(now())
+
+  state                 State               @relation(fields: [stateId], references: [id], onDelete: Cascade)
+
+  @@unique([stateId, name])
+}
+
+// ----------------------------------------------------
+// Sports Entities (Athletes, Teams, Referees)
+// ----------------------------------------------------
+
+model Player {
+  id                    String              @id @default(uuid())
+  userId                String?             @unique
+  playerId              String              @unique
+  name                  String
+  country               String
+  countryCode           String
+  flag                  String
+  state                 String?
+  district              String?
+  club                  String
+  gender                GenderCategory
+  dateOfBirth           DateTime
+  email                 String
+  rankingPoints         Float               @default(0)
+  worldRank             Int                 @default(0)
+  nationalRank          Int                 @default(0)
+  profileImage          String?
+  kycStatus             UserKycStatus       @default(NOT_REQUIRED)
+  medicalExpiryDate     DateTime?
+  stockBodyColor        String?
+  stockDiscWeightKg     Float?
+  stockHandleType       String?
+  stockPlateType        String?
+  createdAt             DateTime            @default(now())
+  updatedAt             DateTime            @updatedAt
+
+  user                  User?               @relation(fields: [userId], references: [id])
+  documents             PlayerDocument[]
+  teamMemberships       TeamMember[]
+  matchParticipants     MatchParticipant[]
+  rankingHistories      RankingHistory[]
+
+  @@index([playerId])
+  @@index([countryCode])
+}
+
+model PlayerDocument {
+  id                    String              @id @default(uuid())
+  playerId              String
+  docType               String
+  documentNumber        String?
+  fileUrl               String
+  fileName              String
+  verified              Boolean             @default(false)
+  expiresAt             DateTime?
+  createdAt             DateTime            @default(now())
+
+  player                Player              @relation(fields: [playerId], references: [id], onDelete: Cascade)
+}
+
+model Team {
+  id                    String              @id @default(uuid())
+  name                  String
+  shortName             String
+  country               String
+  countryCode           String
+  flag                  String
+  state                 String?
+  club                  String
+  category              GenderCategory
+  logo                  String?
+  rankingPoints         Float               @default(0)
+  worldRank             Int                 @default(0)
+  managerName           String?
+  coachName             String?
+  createdAt             DateTime            @default(now())
+  updatedAt             DateTime            @updatedAt
+
+  members               TeamMember[]
+  tournamentEntries     TournamentEntry[]
+  matchesAsTeam1        Match[]             @relation("Team1Matches")
+  matchesAsTeam2        Match[]             @relation("Team2Matches")
+
+  @@index([countryCode])
+}
+
+model TeamMember {
+  id                    String              @id @default(uuid())
+  teamId                String
+  playerId              String
+  tacticalRole          String?             // PLAYMAKER, OFFENSIVE, ALL_ROUNDER
+  jerseyNumber          Int?
+  isCaptain             Boolean             @default(false)
+  joinedAt              DateTime            @default(now())
+
+  team                  Team                @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  player                Player              @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+  @@unique([teamId, playerId])
+}
+
+model Referee {
+  id                    String              @id @default(uuid())
+  userId                String?             @unique
+  licenseNumber         String              @unique
+  name                  String
+  email                 String
+  country               String
+  countryCode           String
+  flag                  String
+  certificationLevel    RefereeCertificationLevel
+  status                RefereeStatus       @default(AVAILABLE_ON_RINK)
+  phone                 String?
+  matchesOfficiated     Int                 @default(0)
+  createdAt             DateTime            @default(now())
+  updatedAt             DateTime            @updatedAt
+
+  user                  User?               @relation(fields: [userId], references: [id])
+  assignments           RefereeAssignment[]
+  matchesOfficiatedList Match[]             @relation("ChiefRefereeMatches")
+
+  @@index([licenseNumber])
+  @@index([status])
+}
+
+// ----------------------------------------------------
+// Tournament & Venue Models
+// ----------------------------------------------------
+
+model Tournament {
+  id                    String              @id @default(uuid())
+  name                  String
+  code                  String              @unique
+  tier                  TournamentTier
+  surface               SurfaceType
+  startDate             DateTime
+  endDate               DateTime
+  registrationDeadline  DateTime
+  venue                 String
+  city                  String
+  country               String
+  latitude              Float?
+  longitude             Float?
+  status                TournamentStatus    @default(DRAFT)
+  organizer             String
+  sanctionedBy          String
+  rinksCount            Int                 @default(4)
+  totalPrizePool        String?
+  bannerImage           String?
+  featured              Boolean             @default(false)
+  createdById           String?
+  createdAt             DateTime            @default(now())
+  updatedAt             DateTime            @updatedAt
+
+  createdBy             User?               @relation("TournamentCreator", fields: [createdById], references: [id])
+  venues                Venue[]
+  rinks                 Rink[]
+  entries               TournamentEntry[]
+  matches               Match[]
+  refereeAssignments    RefereeAssignment[]
+  rankingHistories      RankingHistory[]
+
+  @@index([code])
+  @@index([status])
+  @@index([tier])
+}
+
+model Venue {
+  id                    String              @id @default(uuid())
+  tournamentId          String
+  name                  String
+  city                  String
+  address               String
+  rinksCount            Int                 @default(4)
+  createdAt             DateTime            @default(now())
+
+  tournament            Tournament          @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+  rinks                 Rink[]
+}
+
+model Rink {
+  id                    String              @id @default(uuid())
+  tournamentId          String
+  venueId               String?
+  rinkNumber            String              // "Rink 1", "Center Ice"
+  name                  String
+  surface               SurfaceType
+  dimensions            String              @default("30m x 4m")
+  status                String              @default("OPEN_AVAILABLE")
+  temperatureCelsius    Float?
+  humidityPercentage    Float?
+  createdAt             DateTime            @default(now())
+  updatedAt             DateTime            @updatedAt
+
+  tournament            Tournament          @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+  venue                 Venue?              @relation(fields: [venueId], references: [id], onDelete: SetNull)
+  matches               Match[]
+  refereeAssignments    RefereeAssignment[]
+
+  @@unique([tournamentId, rinkNumber])
+}
+
+model TournamentEntry {
+  id                    String              @id @default(uuid())
+  tournamentId          String
+  teamId                String?
+  playerId              String?
+  category              GenderCategory
+  discipline            Discipline
+  seedNumber            Int?
+  status                String              @default("CONFIRMED")
+  registeredAt          DateTime            @default(now())
+
+  tournament            Tournament          @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+  team                  Team?               @relation(fields: [teamId], references: [id], onDelete: Cascade)
+
+  @@unique([tournamentId, teamId, discipline, category])
+}
+
+// ----------------------------------------------------
+// Matches, Scoring & Referees
+// ----------------------------------------------------
+
+model Match {
+  id                    String              @id @default(uuid())
+  matchNumber           String
+  tournamentId          String
+  rinkId                String?
+  discipline            Discipline
+  stage                 MatchStage          @default(GROUP_STAGE)
+  scheduledTime         DateTime
+  status                MatchStatus         @default(SCHEDULED)
+  scorecardState        ScorecardState      @default(DRAFT)
+  
+  team1Id               String?
+  team2Id               String?
+  player1Id             String?
+  player2Id             String?
+  winnerId              String?
+  
+  chiefRefereeId        String?
+  umpireName            String?
+  laserMeasurerName     String?
+
+  team1Score            Int                 @default(0)
+  team2Score            Int                 @default(0)
+  team1GamePoints       Int                 @default(0) // 2 for win, 1 for draw, 0 for loss
+  team2GamePoints       Int                 @default(0)
+  
+  timerTotalSeconds     Int                 @default(1800)
+  timerCurrentSeconds   Int                 @default(1800)
+  timerRunning          Boolean             @default(false)
+  timeoutsTeam1         Int                 @default(0)
+  timeoutsTeam2         Int                 @default(0)
+
+  lockedAt              DateTime?
+  lockedById            String?
+  createdAt             DateTime            @default(now())
+  updatedAt             DateTime            @updatedAt
+
+  tournament            Tournament          @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+  rink                  Rink?               @relation(fields: [rinkId], references: [id], onDelete: SetNull)
+  team1                 Team?               @relation("Team1Matches", fields: [team1Id], references: [id], onDelete: SetNull)
+  team2                 Team?               @relation("Team2Matches", fields: [team2Id], references: [id], onDelete: SetNull)
+  chiefReferee          Referee?            @relation("ChiefRefereeMatches", fields: [chiefRefereeId], references: [id], onDelete: SetNull)
+  
+  participants          MatchParticipant[]
+  scorecard             Scorecard?
+  scoreAttempts         ScoreAttempt[]
+  refereeAssignments    RefereeAssignment[]
+
+  @@unique([tournamentId, matchNumber])
+  @@index([status])
+  @@index([discipline])
+}
+
+model MatchParticipant {
+  id                    String              @id @default(uuid())
+  matchId               String
+  playerId              String
+  side                  String              // "TEAM_1" | "TEAM_2" | "INDIVIDUAL_1" | "INDIVIDUAL_2"
+  orderNumber           Int                 @default(1)
+  
+  match                 Match               @relation(fields: [matchId], references: [id], onDelete: Cascade)
+  player                Player              @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+  @@unique([matchId, playerId])
+}
+
+model Scorecard {
+  id                    String              @id @default(uuid())
+  matchId               String              @unique
+  scoringSystem         String              @default("IISF_STANDARD_1PT")
+  state                 ScorecardState      @default(DRAFT)
+  rawScoreData          String              // JSON serialized complete state
+  submittedAt           DateTime?
+  verifiedAt            DateTime?
+  verifiedByRefereeId   String?
+  verifiedByRefereeName String?
+  lockedAt              DateTime?
+  lockedByAdminId       String?
+  createdAt             DateTime            @default(now())
+  updatedAt             DateTime            @updatedAt
+
+  match                 Match               @relation(fields: [matchId], references: [id], onDelete: Cascade)
+}
+
+model ScoreAttempt {
+  id                    String              @id @default(uuid())
+  matchId               String
+  roundNumber           Int                 @default(1)
+  attemptNumber         Int                 @default(1)
+  participantId         String              // Team ID or Player ID
+  targetType            String?             // CENTER_RINGS, CLEARANCE, etc.
+  pointsAwarded         Int                 @default(0)
+  distanceMeters        Float?
+  isValid               Boolean             @default(true)
+  stockCoordinateX      Float?              // in mm
+  stockCoordinateY      Float?              // in mm
+  refereeConfirmed      Boolean             @default(false)
+  timestamp             DateTime            @default(now())
+
+  match                 Match               @relation(fields: [matchId], references: [id], onDelete: Cascade)
+
+  @@index([matchId, roundNumber, attemptNumber])
+}
+
+model RefereeAssignment {
+  id                    String              @id @default(uuid())
+  tournamentId          String
+  rinkId                String
+  matchId               String?
+  refereeId             String
+  refereeRole           String              // CHIEF_REFEREE, ASSISTANT_UMPIRE, LASER_MEASURER, LINE_JUDGE
+  shiftStartTime        DateTime
+  shiftEndTime          DateTime
+  status                String              @default("CONFIRMED")
+  createdAt             DateTime            @default(now())
+
+  tournament            Tournament          @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+  rink                  Rink                @relation(fields: [rinkId], references: [id], onDelete: Cascade)
+  match                 Match?              @relation(fields: [matchId], references: [id], onDelete: SetNull)
+  referee               Referee             @relation(fields: [refereeId], references: [id], onDelete: Cascade)
+  user                  User?               @relation(fields: [refereeId], references: [id], onDelete: Cascade)
+
+  @@index([refereeId, shiftStartTime, shiftEndTime])
+}
+
+// ----------------------------------------------------
+// Rankings, Audit & System Settings
+// ----------------------------------------------------
+
+model RankingHistory {
+  id                    String              @id @default(uuid())
+  playerId              String
+  tournamentId          String
+  discipline            Discipline
+  category              GenderCategory
+  position              Int
+  pointsAwarded         Float
+  previousPoints        Float
+  newTotalPoints        Float
+  awardedAt             DateTime            @default(now())
+
+  player                Player              @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  tournament            Tournament          @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+
+  @@index([playerId])
+  @@index([tournamentId])
+}
+
+model AuditLog {
+  id                    String              @id @default(uuid())
+  userId                String?
+  userName              String
+  userRole              UserRole
+  action                String
+  resource              String
+  resourceId            String?
+  oldValue              String?
+  newValue              String?
+  reason                String?
+  ipAddress             String
+  userAgent             String
+  isSuccess             Boolean             @default(true)
+  timestamp             DateTime            @default(now())
+
+  user                  User?               @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([action])
+  @@index([userId])
+  @@index([timestamp])
+}
+
+model SystemSetting {
+  id                    String              @id @default(uuid())
+  key                   String              @unique
+  value                 String              // JSON payload
+  description           String?
+  updatedAt             DateTime            @updatedAt
+}
